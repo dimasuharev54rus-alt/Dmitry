@@ -65,7 +65,10 @@ def is_hex_color(value: str) -> bool:
 
 def is_uuid(value: str) -> bool:
     """Return ``True`` if *value* looks like a UUID (v1–v5, case-insensitive)."""
-    pattern = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    pattern = (
+        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}"
+        r"-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    )
     return bool(re.match(pattern, value))
 
 

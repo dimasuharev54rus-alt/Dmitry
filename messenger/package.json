@@ -1,0 +1,29 @@
+{
+  "name": "dmitry-messenger",
+  "version": "1.0.0",
+  "description": "Real-time messenger like Telegram — web + desktop app",
+  "main": "electron.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "desktop": "electron .",
+    "build-win": "electron-builder --win portable"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.0.0",
+    "express": "^4.21.0",
+    "uuid": "^10.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.dmitry.messenger",
+    "productName": "Dmitry Messenger",
+    "win": {
+      "target": "portable"
+    }
+  }
+}

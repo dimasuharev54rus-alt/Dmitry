@@ -201,6 +201,7 @@ app.delete("/api/messages/:id/reactions", authMiddleware, (req, res) => {
 // ==================== ADMIN ====================
 
 app.get("/api/admin/stats", authMiddleware, (req, res) => {
+  if (req.user.id !== 1) return res.status(403).json({ error: "Нет доступа" });
   const stats = db.getAdminStats();
   res.json(stats);
 });

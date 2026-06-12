@@ -70,6 +70,9 @@ function showMessenger() {
   $("#messenger-screen").classList.remove("hidden");
   $("#my-name").textContent = currentUser.display_name;
   renderAvatar($("#my-avatar"), currentUser);
+  if (currentUser.id === 1) {
+    $("#btn-admin").style.display = "";
+  }
   connectWebSocket();
   loadChats();
 }

@@ -50,6 +50,7 @@ function createUser(username, displayName, password) {
     display_name: displayName,
     password_hash: hash,
     avatar_color: randomColor(),
+    avatar_url: null,
     created_at: now(),
     last_seen: now(),
   };
@@ -85,6 +86,7 @@ function getUserByToken(token) {
     username: user.username,
     display_name: user.display_name,
     avatar_color: user.avatar_color,
+    avatar_url: user.avatar_url || null,
     last_seen: user.last_seen,
   };
 }
@@ -104,6 +106,15 @@ function updateLastSeen(userId) {
   }
 }
 
+function updateProfile(userId, updates) {
+  const db = loadDB();
+  const user = db.users.find((u) => u.id === userId);
+  if (!user) return;
+  if (updates.display_name) user.display_name = updates.display_name;
+  if (updates.avatar_url !== undefined) user.avatar_url = updates.avatar_url;
+  saveDB(db);
+}
+
 function getAllUsers() {
   const db = loadDB();
   return db.users
@@ -112,6 +123,7 @@ function getAllUsers() {
       username: u.username,
       display_name: u.display_name,
       avatar_color: u.avatar_color,
+      avatar_url: u.avatar_url || null,
       last_seen: u.last_seen,
     }))
     .sort((a, b) => a.display_name.localeCompare(b.display_name));
@@ -126,18 +138,22 @@ function getUserById(id) {
     username: user.username,
     display_name: user.display_name,
     avatar_color: user.avatar_color,
+    avatar_url: user.avatar_url || null,
     last_seen: user.last_seen,
   };
 }
 
 // --- Message operations ---
-function saveMessage(senderId, receiverId, text) {
+function saveMessage(senderId, receiverId, text, messageType, fileUrl, duration) {
   const db = loadDB();
   const msg = {
     id: db.nextMessageId++,
     sender_id: senderId,
     receiver_id: receiverId,
-    text,
+    text: text || "",
+    message_type: messageType || "text",
+    file_url: fileUrl || null,
+    duration: duration || 0,
     created_at: now(),
     read: 0,
   };
@@ -163,6 +179,7 @@ function getConversation(userId1, userId2, limit = 100) {
       ...m,
       sender_name: sender ? sender.display_name : "?",
       sender_color: sender ? sender.avatar_color : "#666",
+      sender_avatar_url: sender ? (sender.avatar_url || null) : null,
     };
   });
 }
@@ -193,7 +210,6 @@ function getUnreadCounts(userId) {
 function getRecentChats(userId) {
   const db = loadDB();
 
-  // Find unique conversation partners and latest message
   const latest = {};
   for (const m of db.messages) {
     if (m.sender_id !== userId && m.receiver_id !== userId) continue;
@@ -208,13 +224,20 @@ function getRecentChats(userId) {
     const otherId = parseInt(otherIdStr);
     const user = db.users.find((u) => u.id === otherId);
     if (!user) continue;
+
+    let lastMessage = msg.text;
+    if (msg.message_type === "voice") lastMessage = "🎤 Голосовое сообщение";
+    else if (msg.message_type === "video") lastMessage = "🎥 Видео-кружок";
+    else if (msg.message_type === "image") lastMessage = "📷 Фото";
+
     chats.push({
       id: user.id,
       username: user.username,
       display_name: user.display_name,
       avatar_color: user.avatar_color,
+      avatar_url: user.avatar_url || null,
       last_seen: user.last_seen,
-      last_message: msg.text,
+      last_message: lastMessage,
       last_message_at: msg.created_at,
       last_sender_id: msg.sender_id,
     });
@@ -231,6 +254,7 @@ module.exports = {
   getUserByToken,
   deleteSession,
   updateLastSeen,
+  updateProfile,
   getAllUsers,
   getUserById,
   saveMessage,

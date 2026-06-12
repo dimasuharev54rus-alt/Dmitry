@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Dmitry Messenger</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -39,7 +39,7 @@
       <!-- Sidebar -->
       <aside class="sidebar">
         <div class="sidebar-header">
-          <div class="sidebar-user">
+          <div class="sidebar-user" id="open-settings">
             <div id="my-avatar" class="avatar-sm"></div>
             <span id="my-name"></span>
           </div>
@@ -51,7 +51,6 @@
         </div>
 
         <div id="chat-list" class="chat-list"></div>
-
         <div id="search-results" class="chat-list hidden"></div>
       </aside>
 
@@ -82,13 +81,81 @@
           </div>
 
           <div class="message-input-area">
+            <button id="attach-btn" class="btn-icon" title="Прикрепить фото">📎</button>
             <input type="text" id="message-input" placeholder="Написать сообщение..." autocomplete="off">
-            <button id="send-btn" class="btn-send">➤</button>
+            <button id="voice-btn" class="btn-icon btn-voice" title="Голосовое сообщение">🎤</button>
+            <button id="video-btn" class="btn-icon btn-video" title="Видео-кружок">🎥</button>
+            <button id="send-btn" class="btn-send hidden">➤</button>
           </div>
         </div>
       </main>
     </div>
   </div>
+
+  <!-- SETTINGS MODAL -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-content settings-content">
+      <div class="modal-header">
+        <h2>Настройки</h2>
+        <button id="close-settings" class="btn-icon">✕</button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-avatar-section">
+          <div id="settings-avatar" class="avatar-lg"></div>
+          <label class="btn-upload" for="avatar-input">📷 Сменить фото</label>
+          <input type="file" id="avatar-input" accept="image/*" hidden>
+        </div>
+        <div class="settings-field">
+          <label>Имя</label>
+          <input type="text" id="settings-name" placeholder="Отображаемое имя">
+        </div>
+        <div class="settings-field">
+          <label>Логин</label>
+          <input type="text" id="settings-username" disabled>
+        </div>
+        <button id="save-settings" class="btn-primary">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- VOICE RECORDING OVERLAY -->
+  <div id="voice-overlay" class="modal hidden">
+    <div class="modal-content voice-content">
+      <div class="voice-recording-ui">
+        <div class="voice-pulse"></div>
+        <span id="voice-timer">0:00</span>
+        <p>Запись голосового...</p>
+        <div class="voice-actions">
+          <button id="voice-cancel" class="btn-icon btn-danger">✕</button>
+          <button id="voice-send" class="btn-icon btn-success">➤</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIDEO RECORDING OVERLAY -->
+  <div id="video-overlay" class="modal hidden">
+    <div class="modal-content video-content">
+      <div class="video-recording-ui">
+        <video id="video-preview" class="video-circle" autoplay muted playsinline></video>
+        <span id="video-timer">0:00</span>
+        <div class="video-actions">
+          <button id="video-cancel" class="btn-icon btn-danger">✕</button>
+          <button id="video-send" class="btn-icon btn-success">➤</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMAGE PREVIEW MODAL -->
+  <div id="image-preview-modal" class="modal hidden">
+    <div class="modal-content image-preview-content">
+      <button id="close-image-preview" class="btn-icon close-preview">✕</button>
+      <img id="image-preview-img" src="" alt="">
+    </div>
+  </div>
+
+  <input type="file" id="file-input" accept="image/*" hidden>
 
   <script src="app.js"></script>
 </body>

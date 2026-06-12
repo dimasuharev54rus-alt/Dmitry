@@ -8,6 +8,13 @@ let ws = null;
 let onlineUserIds = new Set();
 let typingTimeout = null;
 
+// Media recording
+let mediaRecorder = null;
+let recordedChunks = [];
+let recordingTimer = null;
+let recordingSeconds = 0;
+let videoStream = null;
+
 // --- DOM ---
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
@@ -30,6 +37,7 @@ const typingIndicator = $("#typing-indicator");
 // --- Init ---
 async function init() {
   setupAuthUI();
+  setupMediaUI();
   if (token) {
     try {
       const res = await api("GET", "/me");
@@ -56,6 +64,19 @@ async function api(method, path, body) {
   const res = await fetch(API + path, opts);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Ошибка");
+  return data;
+}
+
+async function uploadFile(file, endpoint = "/api/upload", fieldName = "file") {
+  const form = new FormData();
+  form.append(fieldName, file);
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Ошибка загрузки");
   return data;
 }
 
@@ -119,7 +140,6 @@ function setupAuthUI() {
     }
   };
 
-  // Enter key
   for (const input of $$("#login-form input")) {
     input.onkeydown = (e) => { if (e.key === "Enter") $("#login-btn").click(); };
   }
@@ -161,16 +181,230 @@ function setupAuthUI() {
     }
   };
 
+  // Show/hide send button based on input
+  messageInput.oninput = () => {
+    const hasText = messageInput.value.trim().length > 0;
+    $("#send-btn").classList.toggle("hidden", !hasText);
+    $("#voice-btn").classList.toggle("hidden", hasText);
+    $("#video-btn").classList.toggle("hidden", hasText);
+  };
+
   // Back button (mobile)
   $("#back-btn").onclick = () => {
     $(".messenger").classList.remove("chat-open");
     activeChatUserId = null;
+  };
+
+  // Settings
+  $("#open-settings").onclick = openSettings;
+  $("#close-settings").onclick = () => $("#settings-modal").classList.add("hidden");
+  $("#save-settings").onclick = saveSettings;
+  $("#avatar-input").onchange = uploadAvatar;
+
+  // Attach photo
+  $("#attach-btn").onclick = () => $("#file-input").click();
+  $("#file-input").onchange = handleFileAttach;
+
+  // Image preview close
+  $("#close-image-preview").onclick = () => $("#image-preview-modal").classList.add("hidden");
+  $("#image-preview-modal").onclick = (e) => {
+    if (e.target === $("#image-preview-modal")) $("#image-preview-modal").classList.add("hidden");
   };
 }
 
 function showError(msg) {
   authError.textContent = msg;
   authError.classList.remove("hidden");
+}
+
+// --- Settings ---
+function openSettings() {
+  const modal = $("#settings-modal");
+  modal.classList.remove("hidden");
+  renderAvatar($("#settings-avatar"), currentUser, true);
+  $("#settings-name").value = currentUser.display_name;
+  $("#settings-username").value = currentUser.username;
+}
+
+async function saveSettings() {
+  const displayName = $("#settings-name").value.trim();
+  if (!displayName) return;
+  try {
+    const res = await api("POST", "/profile", { displayName });
+    currentUser = res.user;
+    $("#my-name").textContent = currentUser.display_name;
+    renderAvatar($("#my-avatar"), currentUser);
+    $("#settings-modal").classList.add("hidden");
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function uploadAvatar() {
+  const file = $("#avatar-input").files[0];
+  if (!file) return;
+  try {
+    const res = await uploadFile(file, "/api/avatar", "avatar");
+    currentUser = res.user;
+    renderAvatar($("#my-avatar"), currentUser);
+    renderAvatar($("#settings-avatar"), currentUser, true);
+  } catch (e) {
+    alert("Ошибка загрузки: " + e.message);
+  }
+}
+
+// --- File Attach ---
+async function handleFileAttach() {
+  const file = $("#file-input").files[0];
+  if (!file || !activeChatUserId) return;
+  try {
+    const res = await uploadFile(file);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "message",
+        receiverId: activeChatUserId,
+        text: "",
+        messageType: "image",
+        fileUrl: res.url,
+      }));
+    }
+  } catch (e) {
+    alert("Ошибка: " + e.message);
+  }
+  $("#file-input").value = "";
+}
+
+// --- Media Recording (Voice + Video) ---
+function setupMediaUI() {
+  // Voice
+  $("#voice-btn").onclick = startVoiceRecording;
+  $("#voice-cancel").onclick = cancelRecording;
+  $("#voice-send").onclick = () => stopAndSend("voice");
+
+  // Video
+  $("#video-btn").onclick = startVideoRecording;
+  $("#video-cancel").onclick = cancelRecording;
+  $("#video-send").onclick = () => stopAndSend("video");
+}
+
+async function startVoiceRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream, { mimeType: getSupportedMime("audio") });
+    recordedChunks = [];
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+    mediaRecorder.start();
+    startTimer("voice-timer");
+    $("#voice-overlay").classList.remove("hidden");
+  } catch (e) {
+    alert("Нет доступа к микрофону");
+  }
+}
+
+async function startVideoRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    videoStream = stream;
+    const preview = $("#video-preview");
+    preview.srcObject = stream;
+
+    mediaRecorder = new MediaRecorder(stream, { mimeType: getSupportedMime("video") });
+    recordedChunks = [];
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+    mediaRecorder.start();
+    startTimer("video-timer");
+    $("#video-overlay").classList.remove("hidden");
+  } catch (e) {
+    alert("Нет доступа к камере");
+  }
+}
+
+function cancelRecording() {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    mediaRecorder.stop();
+  }
+  stopAllTracks();
+  clearTimer();
+  $("#voice-overlay").classList.add("hidden");
+  $("#video-overlay").classList.add("hidden");
+}
+
+function stopAndSend(msgType) {
+  if (!mediaRecorder || mediaRecorder.state === "inactive") return;
+  const duration = recordingSeconds;
+
+  mediaRecorder.onstop = async () => {
+    const ext = msgType === "voice" ? ".webm" : ".webm";
+    const blob = new Blob(recordedChunks, { type: recordedChunks[0]?.type || "audio/webm" });
+    const file = new File([blob], `${msgType}_${Date.now()}${ext}`, { type: blob.type });
+
+    try {
+      const res = await uploadFile(file);
+      if (ws && ws.readyState === WebSocket.OPEN && activeChatUserId) {
+        ws.send(JSON.stringify({
+          type: "message",
+          receiverId: activeChatUserId,
+          text: "",
+          messageType: msgType,
+          fileUrl: res.url,
+          duration: duration,
+        }));
+      }
+    } catch (e) {
+      alert("Ошибка отправки: " + e.message);
+    }
+
+    stopAllTracks();
+    clearTimer();
+    $("#voice-overlay").classList.add("hidden");
+    $("#video-overlay").classList.add("hidden");
+  };
+
+  mediaRecorder.stop();
+}
+
+function stopAllTracks() {
+  if (videoStream) {
+    videoStream.getTracks().forEach((t) => t.stop());
+    videoStream = null;
+  }
+  if (mediaRecorder && mediaRecorder.stream) {
+    mediaRecorder.stream.getTracks().forEach((t) => t.stop());
+  }
+  mediaRecorder = null;
+  recordedChunks = [];
+}
+
+function startTimer(elId) {
+  recordingSeconds = 0;
+  updateTimerDisplay(elId);
+  recordingTimer = setInterval(() => {
+    recordingSeconds++;
+    updateTimerDisplay(elId);
+  }, 1000);
+}
+
+function clearTimer() {
+  clearInterval(recordingTimer);
+  recordingSeconds = 0;
+}
+
+function updateTimerDisplay(elId) {
+  const m = Math.floor(recordingSeconds / 60);
+  const s = recordingSeconds % 60;
+  $(`#${elId}`).textContent = `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function getSupportedMime(kind) {
+  if (kind === "video") {
+    if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) return "video/webm;codecs=vp9,opus";
+    if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) return "video/webm;codecs=vp8,opus";
+    if (MediaRecorder.isTypeSupported("video/webm")) return "video/webm";
+    return "video/mp4";
+  }
+  if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) return "audio/webm;codecs=opus";
+  if (MediaRecorder.isTypeSupported("audio/webm")) return "audio/webm";
+  return "audio/mp4";
 }
 
 // --- WebSocket ---
@@ -302,26 +536,21 @@ async function openChat(user) {
   activeChat.classList.remove("hidden");
   typingIndicator.classList.add("hidden");
 
-  // Header
   renderAvatar($("#chat-avatar"), user);
   $("#chat-name").textContent = user.display_name;
   updateChatStatus(user.id);
 
-  // Load messages
   messagesEl.innerHTML = "";
   try {
     const res = await api("GET", `/messages/${user.id}`);
     renderMessages(res.messages);
-    // Mark as read
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "read", senderId: user.id }));
     }
   } catch {}
 
   messageInput.focus();
-  loadChats(); // refresh unread counts
-
-  // Highlight active chat
+  loadChats();
   for (const item of $$(".chat-item")) item.classList.remove("active");
 }
 
@@ -339,23 +568,105 @@ function renderMessages(messages) {
       divider.innerHTML = `<span>${formatDate(msg.created_at)}</span>`;
       messagesEl.appendChild(divider);
     }
+    messagesEl.appendChild(createMessageEl(msg));
+  }
+  scrollToBottom();
+}
 
-    const div = document.createElement("div");
-    const isOut = msg.sender_id === currentUser.id;
-    div.className = "message " + (isOut ? "message-out" : "message-in");
+function createMessageEl(msg) {
+  const div = document.createElement("div");
+  const isOut = msg.sender_id === currentUser.id;
+  const msgType = msg.message_type || "text";
+  div.className = "message " + (isOut ? "message-out" : "message-in");
+  if (msgType === "video") div.classList.add("message-video");
 
+  // Content based on type
+  if (msgType === "image") {
+    const img = document.createElement("img");
+    img.className = "message-image";
+    img.src = msg.file_url;
+    img.alt = "Фото";
+    img.onclick = () => {
+      $("#image-preview-img").src = msg.file_url;
+      $("#image-preview-modal").classList.remove("hidden");
+    };
+    div.appendChild(img);
+  } else if (msgType === "voice") {
+    const voiceDiv = document.createElement("div");
+    voiceDiv.className = "message-voice";
+    const playBtn = document.createElement("button");
+    playBtn.className = "voice-play-btn";
+    playBtn.textContent = "▶";
+    const waveform = document.createElement("div");
+    waveform.className = "voice-waveform";
+    for (let i = 0; i < 20; i++) {
+      const bar = document.createElement("div");
+      bar.className = "wave-bar";
+      bar.style.height = `${Math.random() * 20 + 5}px`;
+      waveform.appendChild(bar);
+    }
+    const dur = document.createElement("span");
+    dur.className = "voice-duration";
+    dur.textContent = formatDuration(msg.duration);
+    voiceDiv.append(playBtn, waveform, dur);
+    div.appendChild(voiceDiv);
+
+    // Audio playback
+    let audio = null;
+    let playing = false;
+    playBtn.onclick = () => {
+      if (playing) {
+        audio.pause();
+        audio.currentTime = 0;
+        playBtn.textContent = "▶";
+        playing = false;
+      } else {
+        audio = new Audio(msg.file_url);
+        audio.play();
+        playBtn.textContent = "⏸";
+        playing = true;
+        audio.onended = () => { playBtn.textContent = "▶"; playing = false; };
+      }
+    };
+  } else if (msgType === "video") {
+    const videoWrap = document.createElement("div");
+    videoWrap.className = "video-bubble";
+    const video = document.createElement("video");
+    video.className = "video-circle-msg";
+    video.src = msg.file_url;
+    video.preload = "metadata";
+    video.playsInline = true;
+    const playOverlay = document.createElement("div");
+    playOverlay.className = "video-play-overlay";
+    playOverlay.textContent = "▶";
+    videoWrap.append(video, playOverlay);
+    div.appendChild(videoWrap);
+
+    let playing = false;
+    videoWrap.onclick = () => {
+      if (playing) {
+        video.pause();
+        playOverlay.classList.remove("hidden");
+        playing = false;
+      } else {
+        video.play();
+        playOverlay.classList.add("hidden");
+        playing = true;
+        video.onended = () => { playOverlay.classList.remove("hidden"); playing = false; };
+      }
+    };
+  } else {
     const textEl = document.createElement("div");
     textEl.textContent = msg.text;
-
-    const timeEl = document.createElement("div");
-    timeEl.className = "message-time";
-    timeEl.textContent = formatTimeOnly(msg.created_at);
-
-    div.append(textEl, timeEl);
-    messagesEl.appendChild(div);
+    div.appendChild(textEl);
   }
 
-  scrollToBottom();
+  const timeEl = document.createElement("div");
+  timeEl.className = "message-time";
+  timeEl.textContent = formatTimeOnly(msg.created_at);
+  div.appendChild(timeEl);
+
+  return div;
 }
 
 function handleIncomingMessage(msg) {
@@ -364,26 +675,12 @@ function handleIncomingMessage(msg) {
     (msg.sender_id === currentUser.id && msg.receiver_id === activeChatUserId);
 
   if (isForActiveChat) {
-    const div = document.createElement("div");
-    const isOut = msg.sender_id === currentUser.id;
-    div.className = "message " + (isOut ? "message-out" : "message-in");
-
-    const textEl = document.createElement("div");
-    textEl.textContent = msg.text;
-
-    const timeEl = document.createElement("div");
-    timeEl.className = "message-time";
-    timeEl.textContent = formatTimeOnly(msg.created_at);
-
-    div.append(textEl, timeEl);
-    messagesEl.appendChild(div);
+    messagesEl.appendChild(createMessageEl(msg));
     scrollToBottom();
 
-    // Mark as read
     if (msg.sender_id === activeChatUserId && ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "read", senderId: activeChatUserId }));
     }
-
     typingIndicator.classList.add("hidden");
   }
 
@@ -399,10 +696,12 @@ function sendMessage() {
       type: "message",
       receiverId: activeChatUserId,
       text,
+      messageType: "text",
     }));
   }
 
   messageInput.value = "";
+  messageInput.dispatchEvent(new Event("input"));
   messageInput.focus();
 }
 
@@ -424,7 +723,6 @@ function showTyping(name) {
 // --- Online Status ---
 function updateOnlineStatus() {
   if (activeChatUserId) updateChatStatus(activeChatUserId);
-  // Update chat list items too
   loadChats();
 }
 
@@ -440,9 +738,14 @@ function updateChatStatus(userId) {
 }
 
 // --- Helpers ---
-function renderAvatar(el, user) {
-  el.style.background = user.avatar_color;
-  el.textContent = (user.display_name || "?")[0];
+function renderAvatar(el, user, large) {
+  if (user.avatar_url) {
+    el.style.background = `url(${user.avatar_url}) center/cover`;
+    el.textContent = "";
+  } else {
+    el.style.background = user.avatar_color;
+    el.textContent = (user.display_name || "?")[0];
+  }
 }
 
 function scrollToBottom() {
@@ -473,6 +776,12 @@ function formatDate(dateStr) {
   if (diffDays === 0) return "Сегодня";
   if (diffDays === 1) return "Вчера";
   return d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+}
+
+function formatDuration(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 // --- Start ---

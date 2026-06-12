@@ -1,6 +1,8 @@
 const express = require("express");
 const http = require("http");
 const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
 const { WebSocketServer } = require("ws");
 const db = require("./db");
 
@@ -8,9 +10,24 @@ const PORT = process.env.PORT || 3000;
 const app = express();
 const server = http.createServer(app);
 
+// --- Uploads directory ---
+const UPLOADS_DIR = path.join(__dirname, "..", "data", "uploads");
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+// --- Multer config ---
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || ".bin";
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+  },
+});
+const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
+
 // --- Middleware ---
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
+app.use("/uploads", express.static(UPLOADS_DIR));
 
 // --- Auth helpers ---
 function authMiddleware(req, res, next) {
@@ -67,6 +84,7 @@ app.post("/api/login", (req, res) => {
       username: user.username,
       display_name: user.display_name,
       avatar_color: user.avatar_color,
+      avatar_url: user.avatar_url || null,
     },
   });
 });
@@ -81,6 +99,32 @@ app.post("/api/logout", authMiddleware, (req, res) => {
 // Current user
 app.get("/api/me", authMiddleware, (req, res) => {
   res.json({ user: req.user });
+});
+
+// Update profile
+app.post("/api/profile", authMiddleware, (req, res) => {
+  const { displayName } = req.body;
+  if (displayName) {
+    db.updateProfile(req.user.id, { display_name: displayName });
+  }
+  const user = db.getUserById(req.user.id);
+  res.json({ user });
+});
+
+// Upload avatar
+app.post("/api/avatar", authMiddleware, upload.single("avatar"), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Нет файла" });
+  const avatarUrl = `/uploads/${req.file.filename}`;
+  db.updateProfile(req.user.id, { avatar_url: avatarUrl });
+  const user = db.getUserById(req.user.id);
+  res.json({ user });
+});
+
+// Upload file (image, voice, video)
+app.post("/api/upload", authMiddleware, upload.single("file"), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Нет файла" });
+  const fileUrl = `/uploads/${req.file.filename}`;
+  res.json({ url: fileUrl, filename: req.file.originalname, size: req.file.size });
 });
 
 // All users
@@ -148,7 +192,6 @@ wss.on("connection", (ws) => {
       if (!onlineUsers.has(user.id)) onlineUsers.set(user.id, new Set());
       onlineUsers.get(user.id).add(ws);
 
-      // Broadcast online status
       broadcastOnline();
       ws.send(JSON.stringify({ type: "auth_ok", user }));
       return;
@@ -159,18 +202,20 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // Send message
+    // Send message (text, image, voice, video)
     if (msg.type === "message") {
-      const { receiverId, text } = msg;
-      if (!receiverId || !text?.trim()) return;
+      const { receiverId, text, messageType, fileUrl, duration } = msg;
+      if (!receiverId) return;
+      if (messageType === "text" && !text?.trim()) return;
 
-      const saved = db.saveMessage(currentUser.id, receiverId, text.trim());
+      const saved = db.saveMessage(currentUser.id, receiverId, text?.trim() || "", messageType || "text", fileUrl || null, duration || 0);
       const payload = JSON.stringify({
         type: "message",
         message: {
           ...saved,
           sender_name: currentUser.display_name,
           sender_color: currentUser.avatar_color,
+          sender_avatar_url: currentUser.avatar_url || null,
         },
       });
 
@@ -224,6 +269,15 @@ function broadcastOnline() {
 }
 
 // --- Start ---
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Dmitry Messenger запущен: http://localhost:${PORT}`);
+  // Show local network IP
+  const nets = require("os").networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === "IPv4" && !net.internal) {
+        console.log(`📱 Для телефона в одной сети: http://${net.address}:${PORT}`);
+      }
+    }
+  }
 });

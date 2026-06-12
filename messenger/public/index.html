@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Dmitry Messenger</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- ===== AUTH SCREEN ===== -->
+  <div id="auth-screen" class="screen">
+    <div class="auth-container">
+      <div class="auth-logo">🚀</div>
+      <h1 id="auth-title">Регистрация</h1>
+      <p class="auth-subtitle">Мессенджер нового поколения</p>
+      <form class="auth-form" onsubmit="handleAuth(event)">
+        <input type="hidden" id="auth-mode" value="register">
+        <div id="name-field">
+          <input id="auth-name" placeholder="Имя" autocomplete="name">
+        </div>
+        <input id="auth-username" placeholder="Логин" autocomplete="username" required>
+        <input id="auth-password" type="password" placeholder="Пароль" autocomplete="current-password" required>
+        <button type="submit" class="btn-primary" id="auth-btn">Создать аккаунт</button>
+      </form>
+      <p class="auth-switch" id="auth-switch">
+        Уже есть аккаунт? <a onclick="switchAuthMode('login')">Войти</a>
+      </p>
+      <div id="auth-error" class="error hidden"></div>
+    </div>
+  </div>
+
+  <!-- ===== MESSENGER SCREEN ===== -->
+  <div id="messenger-screen" class="screen hidden">
+    <div class="messenger">
+      <!-- Sidebar -->
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <div class="sidebar-user" onclick="openSettings()">
+            <div id="my-avatar" class="avatar-sm"></div>
+            <span id="my-name">User</span>
+          </div>
+          <div style="display:flex;gap:4px;">
+            <button class="btn-icon" onclick="showCreateGroup()" title="Создать группу">👥</button>
+            <button class="btn-icon" id="btn-admin" onclick="openAdmin()" title="Админка" style="display:none">👑</button>
+            <button class="btn-icon" onclick="logout()" title="Выйти">🚪</button>
+          </div>
+        </div>
+        <div class="sidebar-search">
+          <input placeholder="Поиск пользователей..." oninput="handleSearch(event)">
+        </div>
+        <div class="chat-list" id="chat-list"></div>
+      </div>
+
+      <!-- Chat Area -->
+      <div class="chat-area">
+        <div class="no-chat">
+          <div class="no-chat-icon">💬</div>
+          <p>Выберите чат для начала общения</p>
+        </div>
+        <div class="active-chat hidden">
+          <div class="chat-header">
+            <button class="btn-icon mobile-only" onclick="goBack()">←</button>
+            <div id="chat-avatar" class="avatar-md" onclick="if(!activeChatIsGroup && activeChatId) showUserProfile(activeChatId)"></div>
+            <div class="chat-header-info" onclick="if(!activeChatIsGroup && activeChatId) showUserProfile(activeChatId)" style="cursor:pointer">
+              <span id="chat-name">Chat</span>
+              <span id="chat-status" class="chat-status"></span>
+            </div>
+            <div style="margin-left:auto;display:flex;gap:4px;">
+              <button class="btn-icon" onclick="startCall(false)" title="Голосовой звонок">📞</button>
+              <button class="btn-icon" onclick="startCall(true)" title="Видео звонок">📹</button>
+            </div>
+          </div>
+          <div class="messages-container">
+            <div class="messages" id="messages"></div>
+          </div>
+          <div id="typing-indicator" class="typing-indicator hidden"></div>
+          <div class="message-input-area">
+            <button class="btn-icon" onclick="triggerFileUpload()" title="Файл">📎</button>
+            <button class="btn-icon" id="btn-sticker" onclick="toggleStickerPanel()" title="Стикеры">😀</button>
+            <input id="message-input" placeholder="Сообщение..." oninput="updateInputButtons()" onkeydown="handleInputKeydown(event)">
+            <button class="btn-icon btn-send" id="btn-send" onclick="sendMessage()">➤</button>
+            <button class="btn-icon btn-voice" id="btn-voice" onclick="startVoiceRecording()" title="Голосовое">🎤</button>
+            <button class="btn-icon btn-video" id="btn-video" onclick="startVideoRecording()" title="Кружок">🎥</button>
+          </div>
+          <!-- Sticker Panel -->
+          <div id="sticker-panel" class="sticker-panel hidden">
+            <div class="sticker-grid"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== MODALS ===== -->
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>⚙️ Настройки</h2>
+        <button class="btn-icon" onclick="closeModal('settings-modal')">✕</button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-avatar-section">
+          <div id="settings-avatar" class="avatar-lg"></div>
+          <button class="btn-upload" onclick="uploadAvatar()">📷 Сменить фото</button>
+        </div>
+        <div class="settings-field">
+          <label>Имя</label>
+          <input id="settings-name" placeholder="Имя">
+        </div>
+        <div class="settings-field">
+          <label>Логин</label>
+          <input id="settings-username" disabled>
+        </div>
+        <div class="settings-field">
+          <label>О себе</label>
+          <input id="settings-bio" placeholder="Расскажи о себе...">
+        </div>
+        <button class="btn-primary" onclick="saveSettings()">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Profile Modal -->
+  <div id="profile-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>👤 Профиль</h2>
+        <button class="btn-icon" onclick="closeModal('profile-modal')">✕</button>
+      </div>
+      <div class="profile-body">
+        <div class="settings-avatar-section">
+          <div id="profile-avatar" class="avatar-lg"></div>
+          <h3 id="profile-name"></h3>
+          <span id="profile-username" style="color:var(--text-muted)"></span>
+        </div>
+        <div class="profile-stats">
+          <p id="profile-bio" style="text-align:center;margin-bottom:12px;color:var(--text-secondary)"></p>
+          <p id="profile-last-seen"></p>
+          <p id="profile-joined"></p>
+          <p id="profile-messages"></p>
+          <p id="profile-media"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Admin Modal -->
+  <div id="admin-modal" class="modal hidden">
+    <div class="modal-content" style="max-width:500px">
+      <div class="modal-header">
+        <h2>👑 Админ-панель</h2>
+        <button class="btn-icon" onclick="closeModal('admin-modal')">✕</button>
+      </div>
+      <div class="admin-stats">
+        <div class="stat-cards">
+          <div class="stat-card"><span class="stat-value" id="admin-total-users">0</span><span class="stat-label">Пользователей</span></div>
+          <div class="stat-card"><span class="stat-value" id="admin-total-messages">0</span><span class="stat-label">Сообщений</span></div>
+          <div class="stat-card"><span class="stat-value" id="admin-total-groups">0</span><span class="stat-label">Групп</span></div>
+        </div>
+        <h3 style="margin:16px 0 8px">Пользователи:</h3>
+        <div id="admin-user-list" class="admin-user-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Group Modal -->
+  <div id="create-group-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>👥 Новая группа</h2>
+        <button class="btn-icon" onclick="closeModal('create-group-modal')">✕</button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-field">
+          <label>Название группы</label>
+          <input id="group-name-input" placeholder="Введите название...">
+        </div>
+        <div class="settings-field">
+          <label>Участники</label>
+          <div id="group-user-list" class="group-user-list"></div>
+        </div>
+        <button class="btn-primary" onclick="createGroup()">Создать группу</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Voice Recording Overlay -->
+  <div id="voice-overlay" class="modal hidden">
+    <div class="modal-content voice-content">
+      <div class="voice-recording-ui">
+        <div class="voice-pulse"></div>
+        <span id="voice-timer">0:00</span>
+        <div class="voice-actions">
+          <button class="btn-icon btn-danger" onclick="cancelVoiceRecording()">✕</button>
+          <button class="btn-icon btn-success" onclick="sendVoiceRecording()">➤</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Video Recording Overlay -->
+  <div id="video-overlay" class="modal hidden">
+    <div class="modal-content video-content">
+      <div class="video-recording-ui">
+        <video id="video-preview" class="video-circle" autoplay muted playsinline></video>
+        <span id="video-timer">0:00</span>
+        <div class="video-actions">
+          <button class="btn-icon btn-danger" onclick="cancelVideoRecording()">✕</button>
+          <button class="btn-icon btn-success" onclick="sendVideoRecording()">➤</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image Preview Modal -->
+  <div id="image-preview-modal" class="modal hidden" onclick="closeModal('image-preview-modal')">
+    <div class="image-preview-content">
+      <img id="image-preview-img" src="" alt="Preview">
+    </div>
+  </div>
+
+  <!-- Call Overlay -->
+  <div id="call-overlay" class="modal hidden">
+    <div class="modal-content" style="text-align:center">
+      <h2 id="call-name">Звонок</h2>
+      <p id="call-status" style="color:var(--text-muted);margin:8px 0">Вызов...</p>
+      <div style="position:relative;margin:16px auto;width:200px;height:200px;border-radius:50%;overflow:hidden;background:var(--bg-input)">
+        <video id="call-remote-video" class="hidden" style="width:100%;height:100%;object-fit:cover" autoplay playsinline></video>
+      </div>
+      <video id="call-local-video" class="hidden" style="width:80px;height:80px;border-radius:50%;object-fit:cover;position:absolute;bottom:20px;right:20px" autoplay muted playsinline></video>
+      <button class="btn-primary" style="background:var(--red);margin-top:16px" onclick="endCall()">📞 Завершить</button>
+    </div>
+  </div>
+
+  <!-- Particles background canvas -->
+  <canvas id="particles-canvas"></canvas>
+
+  <script src="app.js"></script>
+  <script>
+    // Initialize sticker panel
+    const stickerGrid = document.querySelector('.sticker-grid');
+    if (stickerGrid) {
+      const stickers = ["😀","😂","🥰","😎","🤔","😱","🥳","🤯","😴","🤮","👻","💀","🔥","⭐","🌈","🎉","❤️","💔","👍","👎","✌️","🤙","🙏","💪","🎮","🎵","📸","💻","🚀","🌍","🐱","🐶"];
+      stickers.forEach(s => {
+        const btn = document.createElement('button');
+        btn.textContent = s;
+        btn.onclick = () => sendSticker(s);
+        stickerGrid.appendChild(btn);
+      });
+    }
+
+    // Space particles animation
+    const canvas = document.getElementById('particles-canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    
+    const particles = [];
+    for (let i = 0; i < 80; i++) {
+      particles.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        size: Math.random() * 2 + 0.5,
+        speedX: (Math.random() - 0.5) * 0.3,
+        speedY: (Math.random() - 0.5) * 0.3,
+        opacity: Math.random() * 0.5 + 0.2,
+      });
+    }
+    
+    function animateParticles() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (const p of particles) {
+        p.x += p.speedX;
+        p.y += p.speedY;
+        if (p.x < 0) p.x = canvas.width;
+        if (p.x > canvas.width) p.x = 0;
+        if (p.y < 0) p.y = canvas.height;
+        if (p.y > canvas.height) p.y = 0;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(94, 166, 239, ${p.opacity})`;
+        ctx.fill();
+      }
+      // Draw connections
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 120) {
+            ctx.beginPath();
+            ctx.moveTo(particles[i].x, particles[i].y);
+            ctx.lineTo(particles[j].x, particles[j].y);
+            ctx.strokeStyle = `rgba(94, 166, 239, ${0.1 * (1 - dist / 120)})`;
+            ctx.stroke();
+          }
+        }
+      }
+      requestAnimationFrame(animateParticles);
+    }
+    animateParticles();
+    
+    window.addEventListener('resize', () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    });
+  </script>
+</body>
+</html>

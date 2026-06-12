@@ -159,6 +159,11 @@ app.get("/api/search", authMiddleware, (req, res) => {
   res.json({ users });
 });
 
+// Health check
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", uptime: process.uptime() });
+});
+
 // SPA fallback
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "..", "public", "index.html"));

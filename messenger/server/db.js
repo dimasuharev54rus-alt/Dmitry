@@ -1,50 +1,27 @@
-const Database = require("better-sqlite3");
 const path = require("path");
+const fs = require("fs");
 const bcrypt = require("bcryptjs");
 const { v4: uuidv4 } = require("uuid");
 
-const DB_PATH = path.join(__dirname, "..", "data", "messenger.db");
+// --- JSON file storage (no native modules needed) ---
+const DATA_DIR = path.join(__dirname, "..", "data");
+const DB_FILE = path.join(DATA_DIR, "db.json");
 
-// Ensure data directory exists
-const fs = require("fs");
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const db = new Database(DB_PATH);
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
+function loadDB() {
+  if (fs.existsSync(DB_FILE)) {
+    return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+  }
+  return { users: [], sessions: [], messages: [], nextUserId: 1, nextMessageId: 1 };
+}
 
-// --- Schema ---
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    display_name TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
-    avatar_color TEXT DEFAULT '#7c3aed',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
+function saveDB(data) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf-8");
+}
 
-  CREATE TABLE IF NOT EXISTS sessions (
-    token TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sender_id INTEGER NOT NULL REFERENCES users(id),
-    receiver_id INTEGER NOT NULL REFERENCES users(id),
-    text TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    read INTEGER DEFAULT 0
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_messages_pair
-    ON messages(sender_id, receiver_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_sessions_token
-    ON sessions(token);
-`);
+// Init
+if (!fs.existsSync(DB_FILE)) saveDB(loadDB());
 
 // --- Avatar colors ---
 const COLORS = [
@@ -56,113 +33,195 @@ function randomColor() {
   return COLORS[Math.floor(Math.random() * COLORS.length)];
 }
 
+function now() {
+  return new Date().toISOString();
+}
+
 // --- User operations ---
 function createUser(username, displayName, password) {
+  const db = loadDB();
+  const existing = db.users.find((u) => u.username === username.toLowerCase());
+  if (existing) throw new Error("UNIQUE constraint failed");
+
   const hash = bcrypt.hashSync(password, 10);
-  const color = randomColor();
-  const stmt = db.prepare(
-    "INSERT INTO users (username, display_name, password_hash, avatar_color) VALUES (?, ?, ?, ?)"
-  );
-  const result = stmt.run(username.toLowerCase(), displayName, hash, color);
-  return result.lastInsertRowid;
+  const user = {
+    id: db.nextUserId++,
+    username: username.toLowerCase(),
+    display_name: displayName,
+    password_hash: hash,
+    avatar_color: randomColor(),
+    created_at: now(),
+    last_seen: now(),
+  };
+  db.users.push(user);
+  saveDB(db);
+  return user.id;
 }
 
 function authenticateUser(username, password) {
-  const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username.toLowerCase());
+  const db = loadDB();
+  const user = db.users.find((u) => u.username === username.toLowerCase());
   if (!user) return null;
   if (!bcrypt.compareSync(password, user.password_hash)) return null;
   return user;
 }
 
 function createSession(userId) {
+  const db = loadDB();
   const token = uuidv4();
-  db.prepare("INSERT INTO sessions (token, user_id) VALUES (?, ?)").run(token, userId);
+  db.sessions.push({ token, user_id: userId, created_at: now() });
+  saveDB(db);
   return token;
 }
 
 function getUserByToken(token) {
-  const row = db.prepare(`
-    SELECT u.id, u.username, u.display_name, u.avatar_color, u.last_seen
-    FROM sessions s JOIN users u ON s.user_id = u.id
-    WHERE s.token = ?
-  `).get(token);
-  return row || null;
+  const db = loadDB();
+  const session = db.sessions.find((s) => s.token === token);
+  if (!session) return null;
+  const user = db.users.find((u) => u.id === session.user_id);
+  if (!user) return null;
+  return {
+    id: user.id,
+    username: user.username,
+    display_name: user.display_name,
+    avatar_color: user.avatar_color,
+    last_seen: user.last_seen,
+  };
 }
 
 function deleteSession(token) {
-  db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  const db = loadDB();
+  db.sessions = db.sessions.filter((s) => s.token !== token);
+  saveDB(db);
 }
 
 function updateLastSeen(userId) {
-  db.prepare("UPDATE users SET last_seen = CURRENT_TIMESTAMP WHERE id = ?").run(userId);
+  const db = loadDB();
+  const user = db.users.find((u) => u.id === userId);
+  if (user) {
+    user.last_seen = now();
+    saveDB(db);
+  }
 }
 
 function getAllUsers() {
-  return db.prepare(
-    "SELECT id, username, display_name, avatar_color, last_seen FROM users ORDER BY display_name"
-  ).all();
+  const db = loadDB();
+  return db.users
+    .map((u) => ({
+      id: u.id,
+      username: u.username,
+      display_name: u.display_name,
+      avatar_color: u.avatar_color,
+      last_seen: u.last_seen,
+    }))
+    .sort((a, b) => a.display_name.localeCompare(b.display_name));
 }
 
 function getUserById(id) {
-  return db.prepare(
-    "SELECT id, username, display_name, avatar_color, last_seen FROM users WHERE id = ?"
-  ).get(id);
+  const db = loadDB();
+  const user = db.users.find((u) => u.id === id);
+  if (!user) return undefined;
+  return {
+    id: user.id,
+    username: user.username,
+    display_name: user.display_name,
+    avatar_color: user.avatar_color,
+    last_seen: user.last_seen,
+  };
 }
 
 // --- Message operations ---
 function saveMessage(senderId, receiverId, text) {
-  const stmt = db.prepare(
-    "INSERT INTO messages (sender_id, receiver_id, text) VALUES (?, ?, ?)"
-  );
-  const result = stmt.run(senderId, receiverId, text);
-  return db.prepare("SELECT * FROM messages WHERE id = ?").get(result.lastInsertRowid);
+  const db = loadDB();
+  const msg = {
+    id: db.nextMessageId++,
+    sender_id: senderId,
+    receiver_id: receiverId,
+    text,
+    created_at: now(),
+    read: 0,
+  };
+  db.messages.push(msg);
+  saveDB(db);
+  return msg;
 }
 
 function getConversation(userId1, userId2, limit = 100) {
-  return db.prepare(`
-    SELECT m.*, u.display_name as sender_name, u.avatar_color as sender_color
-    FROM messages m JOIN users u ON m.sender_id = u.id
-    WHERE (m.sender_id = ? AND m.receiver_id = ?)
-       OR (m.sender_id = ? AND m.receiver_id = ?)
-    ORDER BY m.created_at ASC
-    LIMIT ?
-  `).all(userId1, userId2, userId2, userId1, limit);
+  const db = loadDB();
+  const msgs = db.messages
+    .filter(
+      (m) =>
+        (m.sender_id === userId1 && m.receiver_id === userId2) ||
+        (m.sender_id === userId2 && m.receiver_id === userId1)
+    )
+    .sort((a, b) => a.id - b.id)
+    .slice(-limit);
+
+  return msgs.map((m) => {
+    const sender = db.users.find((u) => u.id === m.sender_id);
+    return {
+      ...m,
+      sender_name: sender ? sender.display_name : "?",
+      sender_color: sender ? sender.avatar_color : "#666",
+    };
+  });
 }
 
 function markRead(senderId, receiverId) {
-  db.prepare(
-    "UPDATE messages SET read = 1 WHERE sender_id = ? AND receiver_id = ? AND read = 0"
-  ).run(senderId, receiverId);
+  const db = loadDB();
+  let changed = false;
+  for (const m of db.messages) {
+    if (m.sender_id === senderId && m.receiver_id === receiverId && !m.read) {
+      m.read = 1;
+      changed = true;
+    }
+  }
+  if (changed) saveDB(db);
 }
 
 function getUnreadCounts(userId) {
-  const rows = db.prepare(`
-    SELECT sender_id, COUNT(*) as count
-    FROM messages
-    WHERE receiver_id = ? AND read = 0
-    GROUP BY sender_id
-  `).all(userId);
+  const db = loadDB();
   const counts = {};
-  for (const r of rows) counts[r.sender_id] = r.count;
+  for (const m of db.messages) {
+    if (m.receiver_id === userId && !m.read) {
+      counts[m.sender_id] = (counts[m.sender_id] || 0) + 1;
+    }
+  }
   return counts;
 }
 
 function getRecentChats(userId) {
-  return db.prepare(`
-    SELECT u.id, u.username, u.display_name, u.avatar_color, u.last_seen,
-           m.text as last_message, m.created_at as last_message_at, m.sender_id as last_sender_id
-    FROM users u
-    JOIN (
-      SELECT
-        CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as other_id,
-        MAX(id) as max_id
-      FROM messages
-      WHERE sender_id = ? OR receiver_id = ?
-      GROUP BY other_id
-    ) latest ON u.id = latest.other_id
-    JOIN messages m ON m.id = latest.max_id
-    ORDER BY m.created_at DESC
-  `).all(userId, userId, userId);
+  const db = loadDB();
+
+  // Find unique conversation partners and latest message
+  const latest = {};
+  for (const m of db.messages) {
+    if (m.sender_id !== userId && m.receiver_id !== userId) continue;
+    const otherId = m.sender_id === userId ? m.receiver_id : m.sender_id;
+    if (!latest[otherId] || m.id > latest[otherId].id) {
+      latest[otherId] = m;
+    }
+  }
+
+  const chats = [];
+  for (const [otherIdStr, msg] of Object.entries(latest)) {
+    const otherId = parseInt(otherIdStr);
+    const user = db.users.find((u) => u.id === otherId);
+    if (!user) continue;
+    chats.push({
+      id: user.id,
+      username: user.username,
+      display_name: user.display_name,
+      avatar_color: user.avatar_color,
+      last_seen: user.last_seen,
+      last_message: msg.text,
+      last_message_at: msg.created_at,
+      last_sender_id: msg.sender_id,
+    });
+  }
+
+  chats.sort((a, b) => (b.last_message_at || "").localeCompare(a.last_message_at || ""));
+  return chats;
 }
 
 module.exports = {

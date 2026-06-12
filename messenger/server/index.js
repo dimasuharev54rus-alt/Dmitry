@@ -39,79 +39,65 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-// --- REST API ---
+// ==================== AUTH ROUTES ====================
 
-// Register
 app.post("/api/register", (req, res) => {
   const { username, displayName, password } = req.body;
-  if (!username || !password || !displayName) {
-    return res.status(400).json({ error: "Заполни все поля" });
+  if (!username || !displayName || !password) {
+    return res.status(400).json({ error: "Все поля обязательны" });
   }
-  if (username.length < 3) {
-    return res.status(400).json({ error: "Логин минимум 3 символа" });
-  }
-  if (password.length < 4) {
-    return res.status(400).json({ error: "Пароль минимум 4 символа" });
-  }
+  if (username.length < 2) return res.status(400).json({ error: "Логин слишком короткий" });
+  if (password.length < 3) return res.status(400).json({ error: "Пароль слишком короткий" });
+
   try {
     const userId = db.createUser(username, displayName, password);
     const token = db.createSession(userId);
-    const user = db.getUserById(userId);
+    const user = db.getUserByToken(token);
     res.json({ token, user });
   } catch (e) {
     if (e.message.includes("UNIQUE")) {
-      return res.status(409).json({ error: "Логин уже занят" });
+      return res.status(400).json({ error: "Логин уже занят" });
     }
     res.status(500).json({ error: "Ошибка сервера" });
   }
 });
 
-// Login
 app.post("/api/login", (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
-    return res.status(400).json({ error: "Заполни все поля" });
+    return res.status(400).json({ error: "Введите логин и пароль" });
   }
+
   const user = db.authenticateUser(username, password);
-  if (!user) {
-    return res.status(401).json({ error: "Неверный логин или пароль" });
-  }
+  if (!user) return res.status(401).json({ error: "Неверный логин или пароль" });
+
   const token = db.createSession(user.id);
-  res.json({
-    token,
-    user: {
-      id: user.id,
-      username: user.username,
-      display_name: user.display_name,
-      avatar_color: user.avatar_color,
-      avatar_url: user.avatar_url || null,
-    },
-  });
+  const userData = db.getUserByToken(token);
+  res.json({ token, user: userData });
 });
 
-// Logout
 app.post("/api/logout", authMiddleware, (req, res) => {
-  const token = req.headers.authorization.replace("Bearer ", "");
+  const token = req.headers.authorization?.replace("Bearer ", "");
   db.deleteSession(token);
   res.json({ ok: true });
 });
 
-// Current user
+// ==================== USER ROUTES ====================
+
 app.get("/api/me", authMiddleware, (req, res) => {
   res.json({ user: req.user });
 });
 
-// Update profile
 app.post("/api/profile", authMiddleware, (req, res) => {
-  const { displayName } = req.body;
-  if (displayName) {
-    db.updateProfile(req.user.id, { display_name: displayName });
-  }
+  const { displayName, bio } = req.body;
+  const updates = {};
+  if (displayName) updates.display_name = displayName;
+  if (bio !== undefined) updates.bio = bio;
+  db.updateProfile(req.user.id, updates);
   const user = db.getUserById(req.user.id);
   res.json({ user });
 });
 
-// Upload avatar
 app.post("/api/avatar", authMiddleware, upload.single("avatar"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "Нет файла" });
   const avatarUrl = `/uploads/${req.file.filename}`;
@@ -120,38 +106,37 @@ app.post("/api/avatar", authMiddleware, upload.single("avatar"), (req, res) => {
   res.json({ user });
 });
 
-// Upload file (image, voice, video)
+app.get("/api/user/:id", authMiddleware, (req, res) => {
+  const user = db.getUserById(parseInt(req.params.id));
+  if (!user) return res.status(404).json({ error: "Пользователь не найден" });
+  const stats = db.getUserStats(user.id);
+  res.json({ user, stats });
+});
+
 app.post("/api/upload", authMiddleware, upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "Нет файла" });
   const fileUrl = `/uploads/${req.file.filename}`;
   res.json({ url: fileUrl, filename: req.file.originalname, size: req.file.size });
 });
 
-// All users
-app.get("/api/users", authMiddleware, (req, res) => {
-  const users = db.getAllUsers().filter((u) => u.id !== req.user.id);
-  res.json({ users });
-});
+// ==================== CHAT ROUTES ====================
 
-// Conversation with a user
-app.get("/api/messages/:userId", authMiddleware, (req, res) => {
-  const otherId = parseInt(req.params.userId);
-  const messages = db.getConversation(req.user.id, otherId);
-  db.markRead(otherId, req.user.id);
-  res.json({ messages });
-});
-
-// Recent chats
 app.get("/api/chats", authMiddleware, (req, res) => {
   const chats = db.getRecentChats(req.user.id);
   const unread = db.getUnreadCounts(req.user.id);
   res.json({ chats, unread });
 });
 
-// Search users
-app.get("/api/search", authMiddleware, (req, res) => {
+app.get("/api/messages/:userId", authMiddleware, (req, res) => {
+  const messages = db.getConversation(req.user.id, parseInt(req.params.userId));
+  db.markRead(parseInt(req.params.userId), req.user.id);
+  res.json({ messages });
+});
+
+app.get("/api/users/search", authMiddleware, (req, res) => {
   const q = (req.query.q || "").toLowerCase();
-  const users = db.getAllUsers().filter(
+  const allUsers = db.getAllUsers();
+  const users = allUsers.filter(
     (u) => u.id !== req.user.id && (
       u.username.includes(q) || u.display_name.toLowerCase().includes(q)
     )
@@ -159,7 +144,69 @@ app.get("/api/search", authMiddleware, (req, res) => {
   res.json({ users });
 });
 
-// Health check
+// ==================== GROUP ROUTES ====================
+
+app.post("/api/groups", authMiddleware, (req, res) => {
+  const { name, memberIds } = req.body;
+  if (!name || !memberIds || !memberIds.length) {
+    return res.status(400).json({ error: "Имя группы и участники обязательны" });
+  }
+  const group = db.createGroup(name, req.user.id, memberIds);
+  res.json({ group });
+});
+
+app.get("/api/groups/:id", authMiddleware, (req, res) => {
+  const groupId = parseInt(req.params.id);
+  if (!db.isGroupMember(groupId, req.user.id)) {
+    return res.status(403).json({ error: "Вы не в этой группе" });
+  }
+  const group = db.getGroupById(groupId);
+  const members = db.getGroupMembers(groupId);
+  res.json({ group, members });
+});
+
+app.get("/api/groups/:id/messages", authMiddleware, (req, res) => {
+  const groupId = parseInt(req.params.id);
+  if (!db.isGroupMember(groupId, req.user.id)) {
+    return res.status(403).json({ error: "Вы не в этой группе" });
+  }
+  const messages = db.getGroupMessages(groupId);
+  res.json({ messages });
+});
+
+app.post("/api/groups/:id/members", authMiddleware, (req, res) => {
+  const groupId = parseInt(req.params.id);
+  const { userId } = req.body;
+  db.addGroupMember(groupId, userId);
+  res.json({ ok: true });
+});
+
+// ==================== REACTIONS ====================
+
+app.post("/api/messages/:id/reactions", authMiddleware, (req, res) => {
+  const messageId = parseInt(req.params.id);
+  const { emoji } = req.body;
+  if (!emoji) return res.status(400).json({ error: "Emoji обязателен" });
+  const reaction = db.addReaction(messageId, req.user.id, emoji);
+  res.json({ reaction });
+});
+
+app.delete("/api/messages/:id/reactions", authMiddleware, (req, res) => {
+  const messageId = parseInt(req.params.id);
+  const { emoji } = req.body;
+  db.removeReaction(messageId, req.user.id, emoji);
+  res.json({ ok: true });
+});
+
+// ==================== ADMIN ====================
+
+app.get("/api/admin/stats", authMiddleware, (req, res) => {
+  const stats = db.getAdminStats();
+  res.json(stats);
+});
+
+// ==================== HEALTH ====================
+
 app.get("/health", (req, res) => {
   res.json({ status: "ok", uptime: process.uptime() });
 });
@@ -169,86 +216,161 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "..", "public", "index.html"));
 });
 
-// --- WebSocket ---
+// ==================== WebSocket ====================
 const wss = new WebSocketServer({ server });
 const onlineUsers = new Map(); // userId -> Set<ws>
+
+function broadcastOnline() {
+  const onlineIds = [...onlineUsers.keys()];
+  const payload = JSON.stringify({ type: "online", userIds: onlineIds });
+  for (const [, sockets] of onlineUsers) {
+    for (const s of sockets) s.send(payload);
+  }
+}
 
 wss.on("connection", (ws) => {
   let currentUser = null;
 
   ws.on("message", (raw) => {
     let msg;
-    try {
-      msg = JSON.parse(raw);
-    } catch {
-      return;
-    }
+    try { msg = JSON.parse(raw); } catch { return; }
 
     // Auth
     if (msg.type === "auth") {
       const user = db.getUserByToken(msg.token);
-      if (!user) {
-        ws.send(JSON.stringify({ type: "error", text: "Не авторизован" }));
-        return;
-      }
+      if (!user) return ws.send(JSON.stringify({ type: "error", error: "auth_failed" }));
       currentUser = user;
-      db.updateLastSeen(user.id);
-
       if (!onlineUsers.has(user.id)) onlineUsers.set(user.id, new Set());
       onlineUsers.get(user.id).add(ws);
-
       broadcastOnline();
-      ws.send(JSON.stringify({ type: "auth_ok", user }));
       return;
     }
 
-    if (!currentUser) {
-      ws.send(JSON.stringify({ type: "error", text: "Сначала авторизуйся" }));
-      return;
-    }
+    if (!currentUser) return;
 
-    // Send message (text, image, voice, video)
+    // Direct message
     if (msg.type === "message") {
-      const { receiverId, text, messageType, fileUrl, duration } = msg;
-      if (!receiverId) return;
-      if (messageType === "text" && !text?.trim()) return;
+      const saved = db.saveMessage(
+        currentUser.id,
+        msg.receiverId,
+        msg.text || "",
+        msg.messageType || "text",
+        msg.fileUrl || null,
+        msg.duration || 0,
+        null
+      );
 
-      const saved = db.saveMessage(currentUser.id, receiverId, text?.trim() || "", messageType || "text", fileUrl || null, duration || 0);
       const payload = JSON.stringify({
         type: "message",
         message: {
           ...saved,
           sender_name: currentUser.display_name,
           sender_color: currentUser.avatar_color,
-          sender_avatar_url: currentUser.avatar_url || null,
+          sender_avatar_url: currentUser.avatar_url,
+          reactions: [],
         },
       });
 
+      // Send to sender
+      const senderSockets = onlineUsers.get(currentUser.id);
+      if (senderSockets) for (const s of senderSockets) s.send(payload);
+
       // Send to receiver
-      const receiverSockets = onlineUsers.get(receiverId);
-      if (receiverSockets) {
-        for (const s of receiverSockets) s.send(payload);
+      const receiverSockets = onlineUsers.get(msg.receiverId);
+      if (receiverSockets) for (const s of receiverSockets) s.send(payload);
+    }
+
+    // Group message
+    if (msg.type === "group_message") {
+      const groupId = msg.groupId;
+      if (!db.isGroupMember(groupId, currentUser.id)) return;
+
+      const saved = db.saveMessage(
+        currentUser.id,
+        null,
+        msg.text || "",
+        msg.messageType || "text",
+        msg.fileUrl || null,
+        msg.duration || 0,
+        groupId
+      );
+
+      const members = db.getGroupMembers(groupId);
+      const payload = JSON.stringify({
+        type: "group_message",
+        groupId,
+        message: {
+          ...saved,
+          sender_name: currentUser.display_name,
+          sender_color: currentUser.avatar_color,
+          sender_avatar_url: currentUser.avatar_url,
+          reactions: [],
+        },
+      });
+
+      for (const member of members) {
+        const sockets = onlineUsers.get(member.user_id);
+        if (sockets) for (const s of sockets) s.send(payload);
       }
-      // Echo to sender
-      ws.send(payload);
     }
 
     // Typing indicator
     if (msg.type === "typing") {
-      const receiverSockets = onlineUsers.get(msg.receiverId);
-      if (receiverSockets) {
-        const payload = JSON.stringify({
-          type: "typing",
-          userId: currentUser.id,
-          displayName: currentUser.display_name,
-        });
-        for (const s of receiverSockets) s.send(payload);
+      const payload = JSON.stringify({
+        type: "typing",
+        userId: currentUser.id,
+        name: currentUser.display_name,
+      });
+
+      if (msg.groupId) {
+        const members = db.getGroupMembers(msg.groupId);
+        for (const member of members) {
+          if (member.user_id === currentUser.id) continue;
+          const sockets = onlineUsers.get(member.user_id);
+          if (sockets) for (const s of sockets) s.send(payload);
+        }
+      } else if (msg.receiverId) {
+        const receiverSockets = onlineUsers.get(msg.receiverId);
+        if (receiverSockets) for (const s of receiverSockets) s.send(payload);
       }
     }
 
     // Mark read
     if (msg.type === "read") {
       db.markRead(msg.senderId, currentUser.id);
+    }
+
+    // Reaction via WS (broadcast to relevant users)
+    if (msg.type === "reaction") {
+      const { messageId, emoji, action } = msg;
+      if (action === "add") {
+        db.addReaction(messageId, currentUser.id, emoji);
+      } else {
+        db.removeReaction(messageId, currentUser.id, emoji);
+      }
+      const reactions = db.getReactions(messageId);
+      const payload = JSON.stringify({
+        type: "reaction_update",
+        messageId,
+        reactions,
+      });
+      // Broadcast to all online users (simplified)
+      for (const [, sockets] of onlineUsers) {
+        for (const s of sockets) s.send(payload);
+      }
+    }
+
+    // Call signaling
+    if (msg.type === "call_offer" || msg.type === "call_answer" || msg.type === "call_ice" || msg.type === "call_end") {
+      const targetSockets = onlineUsers.get(msg.targetId);
+      if (targetSockets) {
+        const payload = JSON.stringify({
+          ...msg,
+          callerId: currentUser.id,
+          callerName: currentUser.display_name,
+        });
+        for (const s of targetSockets) s.send(payload);
+      }
     }
   });
 
@@ -265,18 +387,9 @@ wss.on("connection", (ws) => {
   });
 });
 
-function broadcastOnline() {
-  const online = Array.from(onlineUsers.keys());
-  const payload = JSON.stringify({ type: "online", userIds: online });
-  for (const [, sockets] of onlineUsers) {
-    for (const s of sockets) s.send(payload);
-  }
-}
-
 // --- Start ---
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Dmitry Messenger запущен: http://localhost:${PORT}`);
-  // Show local network IP
   const nets = require("os").networkInterfaces();
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
